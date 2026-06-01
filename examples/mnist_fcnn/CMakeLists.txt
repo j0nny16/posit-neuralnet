@@ -1,0 +1,1 @@
+../mnist_lenet5/CMakeLists.txt

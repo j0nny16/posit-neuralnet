@@ -1,0 +1,11 @@
+*.DS_Store
+.vscode/
+
+build/
+include/libtorch/
+include/universal/
+
+*.o
+*.swp
+*.dat
+*.pt
