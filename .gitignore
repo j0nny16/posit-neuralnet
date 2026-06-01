@@ -1,6 +1,9 @@
 *.DS_Store
 .vscode/
 
+#not needed for this branch
+examples/
+
 build/
 include/libtorch/
 include/universal/
