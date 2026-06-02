@@ -36,6 +36,10 @@ public:
 	StdTensor<BackwardT> derivative() {
 		StdTensor<BackwardT> dloss = error * 2;
 
+		if(m_reduction == Reduction::Mean) {
+            dloss /= BackwardT(m_size); 
+        }
+
 		/*
 		for(size_t i=0, size=dloss.size(); i<size; i++){
 			// Calculate derivative of loss
@@ -43,12 +47,6 @@ public:
 			dloss[i] *= 2;
 		}
 		*/
-
-		// <-- NEU: Den Gradienten exakt wie in PyTorch skalieren!
-        if(m_reduction == Reduction::Mean) {
-            // Wir teilen den gesamten Gradienten-Tensor durch die Anzahl aller Elemente
-            dloss /= BackwardT(m_size); 
-        }
 
 		return dloss;
 	}

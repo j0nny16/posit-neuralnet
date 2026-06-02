@@ -9,6 +9,7 @@
 #include "init.hpp"
 #include "Layer.hpp"
 #include "../tensor/transposed_convolution.hpp"
+#include "../tensor/convolution.hpp"
 #include "../tensor/MixedTensor.hpp"
 #include "../tensor/sum.hpp"
 #include "../tensor/StdTensor.hpp"
@@ -73,6 +74,24 @@ public:
         );
     }
 
+    // template <typename T>
+    // StdTensor<BackwardT> backward(StdTensor<T> const& delta) {
+    //     // 1. Berechnet die Gradienten für die Gewichte (belassen wir wie es ist)
+    //     gradient(delta);
+    //     // 3. Der geniale Mathe-Trick: Der Backward-Pass (Input) einer Transposed Conv 
+    //     // ist exakt eine normale Conv2d von delta mit den originalen Parametern!
+    //     return convolution2d<BackwardT::nbits, BackwardT::es>(
+    //         delta, 
+    //         weight.get_backward(), 
+    //         StdTensor<BackwardT>(), // Leerer Bias-Tensor (Gradienten zum Input haben keinen Bias)
+    //         stride,                      // Groups / Dilation Parameter
+    //         padding,                // Das GANZ NORMALE Padding aus dem Forward-Pass
+    //         1,                 // Der GANZ NORMALE Stride
+    //         dilation, 
+    //         &w
+    //     );
+    // }
+
     // void gradient(StdTensor<GradientT> const& delta) {
     //     StdTensor<GradientT> temp_weight_gradient = transposed_convolution2d_gradient<GradientT::nbits, GradientT::es>(
     //         input, delta, stride, padding, dilation
@@ -96,10 +115,10 @@ public:
     void gradient(StdTensor<GradientT> const& delta) {
         // 1. Berechnung der Roh-Gradienten (Summen über die räumlichen Dimensionen)
         StdTensor<GradientT> temp_weight_gradient = transposed_convolution2d_gradient<GradientT::nbits, GradientT::es>(
-            input, delta, stride, padding, dilation
+            input, delta, stride, padding, dilation, kernel_size, kernel_size
         );
         // sum_last2 summiert über H und W von delta -> Ergebnis: [Batch, Channels]
-        StdTensor<GradientT> temp_bias_gradient = sum_last2(delta);
+        StdTensor<GradientT> temp_bias_gradient;
 
         // // 2. Räumliche Normalisierung berechnen
         // // Die räumlichen Dimensionen von delta entsprechen der Ausgabegröße des Layers
@@ -118,8 +137,11 @@ public:
             //temp_weight_gradient /= batch_size;
 
             // sum_first summiert über die Batch-Dimension -> Ergebnis: [Channels]
-            temp_bias_gradient = sum_first(temp_bias_gradient);
+            temp_bias_gradient = sum_first(delta);
+            temp_bias_gradient = sum_last2(temp_bias_gradient);
             //temp_bias_gradient /= batch_size; //Keine Normalisierung
+        }else{
+            temp_bias_gradient = sum_last2(delta);
         }
 
         // 4. Akkumulation in die Layer-Parameter
@@ -142,6 +164,7 @@ private:
     StdTensor<GradientT> input;
     StdTensor<OptimizerT> weight_gradient;
     StdTensor<OptimizerT> bias_gradient;
+    Window w;
 };
 
 #endif /* TRANSPOSED_CONV2D_HPP */

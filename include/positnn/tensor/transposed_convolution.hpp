@@ -270,10 +270,10 @@ StdTensor<posit<nbits, es>> transposed_convolution2d(StdTensor<posit<nbits, es>>
 
                     auto quire_val = q.to_value();
 
-                    size_t current_batch = input_batch_idx / input_batch_stride; 
+                    size_t current_batch = input_batch / input_batch_stride; 
                     safe_convert<nbits, es>(
                         quire_val, 
-                        output[output_channel_idx + out_spatial_idx], 
+                        output[output_channel + out_spatial_idx], 
                         "Forward Pass (Single Thread)", 
                         current_batch, oc, oy, ox
                     );
@@ -592,7 +592,7 @@ void transposed_convolution2d_gradient_thread( StdTensor<posit<nbits, es>> const
                 auto quire_val = q.to_value();
                 safe_convert<nbits, es>(
                     quire_val, 
-                    dweight[n], // oder wie auch immer dein Ziel-Index heißt
+                    dweight[n++], // oder wie auch immer dein Ziel-Index heißt
                     "Backward Weight (Gradient) Pass", 
                     0, in_c, kh, kw // 0 als Dummy für Batch, da wir über alle Batches akkumulieren
                 );
@@ -618,7 +618,9 @@ StdTensor<posit<nbits, es>> transposed_convolution2d_gradient(
                                                 StdTensor<posit<nbits, es>> const& delta,
                                                 size_t const stride=1,
                                                 size_t const padding=0,
-                                                size_t const dilation=1 ) {
+                                                size_t const dilation=1,
+                                                size_t const kernel_h=0, size_t const kernel_w=0
+                                             ) {
 
     size_t const in_channels = input.shape()[1];
     size_t const in_h = input.shape()[2];
@@ -626,11 +628,14 @@ StdTensor<posit<nbits, es>> transposed_convolution2d_gradient(
     size_t const out_channels = delta.shape()[1];
     size_t const out_h = delta.shape()[2];
 
-    size_t kernel_h = (out_h + 2 * padding - in_h) / dilation + 1;
-    if (stride > 1) {
-        kernel_h = out_h + 2 * padding - (in_h - 1) * stride;
-    }
-    size_t kernel_w = kernel_h;
+    // size_t kernel_h = (out_h + 2 * padding - in_h) / dilation + 1;
+    // if (stride > 1) {
+    //     kernel_h = out_h + 2 * padding - (in_h - 1) * stride;
+    // }
+    // size_t kernel_w = kernel_h;
+
+    // size_t kernel_h = (out_h + 2*padding - output_padding - (in_h -1) * stride) / dilation + 1;
+    // size_t kernel_w = kernel_h;
 
     StdTensor<posit<nbits, es>> dweight({in_channels, out_channels, kernel_h, kernel_w});
     size_t const size_total = dweight.size();
@@ -670,7 +675,9 @@ StdTensor<posit<nbits, es>> transposed_convolution2d_gradient(
                                                 StdTensor<posit<nbits, es>> const& delta,
                                                 size_t const stride=1,
                                                 size_t const padding=0,
-                                                size_t const dilation=1 ) {
+                                                size_t const dilation=1,
+                                                size_t const kernel_h=0, size_t const kernel_w=0
+                                             ) {
 
     size_t const batch_size = input.shape()[0];
     size_t const in_channels = input.shape()[1];
@@ -684,11 +691,15 @@ StdTensor<posit<nbits, es>> transposed_convolution2d_gradient(
     // Die Gewichtsdimension bei TransposedConv ist (in_channels, out_channels, kernel_h, kernel_w)
     // Kernel Size kann aus der Stride- und Padding-Beziehung abgeleitet werden oder 
     // muss berechnet werden. Hier berechnen wir Kernel H und W rückwärts.
-    size_t kernel_h = (out_h + 2 * padding - in_h) / dilation + 1;
-    if (stride > 1) {
-        kernel_h = out_h + 2 * padding - (in_h - 1) * stride;
-    }
-    size_t kernel_w = kernel_h;
+    // size_t kernel_h = (out_h + 2 * padding - in_h) / dilation + 1;
+    // if (stride > 1) {
+    //     kernel_h = out_h + 2 * padding - (in_h - 1) * stride;
+    // }
+    // size_t kernel_w = kernel_h;
+
+    // size_t kernel_h = (out_h + 2*padding - output_padding - (in_h -1) * stride) / dilation + 1;
+    // size_t kernel_w = kernel_h;
+
 
     StdTensor<posit<nbits, es>> dweight({in_channels, out_channels, kernel_h, kernel_w});
     size_t const size = dweight.strides()[1]; 
@@ -723,7 +734,7 @@ StdTensor<posit<nbits, es>> transposed_convolution2d_gradient(
                 auto quire_val = q.to_value();
                 safe_convert<nbits, es>(
                     quire_val, 
-                    dweight[n], // oder wie auch immer dein Ziel-Index heißt
+                    dweight[n++], // oder wie auch immer dein Ziel-Index heißt
                     "Backward Weight (Gradient) Pass", 
                     0, in_c, kh, kw // 0 als Dummy für Batch, da wir über alle Batches akkumulieren
                 );
