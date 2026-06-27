@@ -48,20 +48,20 @@ public:
         }
     }
 
-    void step() {
+    void step(double loss_scale=1.0) {
         /*
          * GLOBALER ZEITSCHRITT:
          * t muss einmal pro Batch erhöht werden, nicht pro Parameter-Update.
          * Danach rufen wir die Basisklasse auf, die das Multithreading startet.
          */
         _options.t++;
-        Optimizer<T>::step(); 
+        Optimizer<T>::step(loss_scale); 
     }
 
     AdamOptions<T>& options() { return _options; }
 
 private:
-    void update_parameter(Parameter<T>& p, size_t const i) override {
+    void update_parameter(Parameter<T>& p, size_t const i, double loss_scale=1.0) override {
         /*
          * MULTITHREADING-KONTEXT:
          * Diese Funktion wird von einem Thread für EINEN spezifischen Parameter (Layer) aufgerufen.
@@ -88,6 +88,8 @@ private:
         T bias_corr1 = one / (one - posit_pow(beta1, _options.t));
         T bias_corr2 = one / (one - posit_pow(beta2, _options.t));
 
+        T inv_scale = T(1.0 / loss_scale);
+
         /*
          * WARUM EIN EXPLIZITER LOOP STATT FUSED()?
          * * 1. Funktionalität: Die Methode fused() in PositNN kann nur (A = A*x + B).
@@ -102,7 +104,7 @@ private:
          * Das ist um ein Vielfaches schneller.
          */
         for (size_t j = 0; j < weights.size(); ++j) {
-            T g = grad[j];
+            T g = grad[j] * inv_scale;
 
             // Update m (1. Moment - Momentum)
             m[j] = beta1 * m[j] + (T(1.0) - beta1) * g;

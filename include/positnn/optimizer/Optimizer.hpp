@@ -33,9 +33,9 @@ public:
 
 #ifndef USING_LL_THREADS
 
-	void step() {
+	void step(double loss_scale=1.0) {
 		for(size_t i=0, size=_parameters.size(); i<size; i++) {
-			update_parameter(_parameters[i], i);
+			update_parameter(_parameters[i], i, loss_scale);
 		}
 
 		return;
@@ -43,7 +43,7 @@ public:
 
 #else
 	
-	void step() {
+	void step(double loss_scale=1.0) {
 		const size_t size = _parameters.size();
 
 		// Declare threads (each thread will take care of the same # of parameters)
@@ -62,7 +62,7 @@ public:
 			size_t const thread_samples = (t<nthreads_more) ? n_samples+1 : n_samples;
 
 			threads.push_back(std::thread(&Optimizer::step_thread, this,
-										begin, thread_samples	));
+										begin, thread_samples, loss_scale	));
 			
 			// Go to next samples
 			begin += thread_samples;
@@ -77,15 +77,15 @@ public:
 
 protected:
 
-	void step_thread(size_t begin, size_t n) {
+	void step_thread(size_t begin, size_t n, double loss_scale=1.0) {
 		for(size_t i=begin, end=begin+n; i<end; i++) {
-			update_parameter(_parameters[i], i);
+			update_parameter(_parameters[i], i, loss_scale);
 		}
 	}
 
 #endif /* USING_LL_THREADS */
 
-	virtual void update_parameter(Parameter<T>&, size_t const) { }
+	virtual void update_parameter(Parameter<T>&, size_t const, double) { }
 
 	std::vector<Parameter<T>> _parameters;
 };

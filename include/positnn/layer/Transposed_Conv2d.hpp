@@ -51,6 +51,10 @@ public:
 		
 		// Die Gewichte müssen auch für den Backward-Pass synchronisiert werden
 		weight.get_backward() = weight.get_forward();
+        weight.get_optimizer() = weight.get_forward();
+        bias.get_backward()    = bias.get_forward();
+        bias.get_optimizer()   = bias.get_forward();
+
 
         std::cout << "Transposed_Conv2d Layer Kaiming initialized" << std::endl;
 	}
@@ -70,81 +74,24 @@ public:
         return transposed_convolution2d_backward_input<BackwardT::nbits, BackwardT::es>(
             delta, weight.get_backward(), 
             input.shape()[2], input.shape()[3], 
-            stride, stride, padding, padding
+            stride, stride, padding, padding, dilation
         );
     }
 
-    // template <typename T>
-    // StdTensor<BackwardT> backward(StdTensor<T> const& delta) {
-    //     // 1. Berechnet die Gradienten für die Gewichte (belassen wir wie es ist)
-    //     gradient(delta);
-    //     // 3. Der geniale Mathe-Trick: Der Backward-Pass (Input) einer Transposed Conv 
-    //     // ist exakt eine normale Conv2d von delta mit den originalen Parametern!
-    //     return convolution2d<BackwardT::nbits, BackwardT::es>(
-    //         delta, 
-    //         weight.get_backward(), 
-    //         StdTensor<BackwardT>(), // Leerer Bias-Tensor (Gradienten zum Input haben keinen Bias)
-    //         stride,                      // Groups / Dilation Parameter
-    //         padding,                // Das GANZ NORMALE Padding aus dem Forward-Pass
-    //         1,                 // Der GANZ NORMALE Stride
-    //         dilation, 
-    //         &w
-    //     );
-    // }
-
-    // void gradient(StdTensor<GradientT> const& delta) {
-    //     StdTensor<GradientT> temp_weight_gradient = transposed_convolution2d_gradient<GradientT::nbits, GradientT::es>(
-    //         input, delta, stride, padding, dilation
-    //     );
-    //     StdTensor<GradientT> temp_bias_gradient = sum_last2(delta);
-
-    //     // If there are many samples
-    //     if(input.dim()>1 && input.shape()[0]>1){
-    //         temp_weight_gradient /= input.shape()[0];
-
-    //         temp_bias_gradient = sum_first(temp_bias_gradient);
-    //         temp_bias_gradient /= input.shape()[0];
-    //     }
-
-    //     weight_gradient += temp_weight_gradient;
-    //     bias_gradient += temp_bias_gradient;
-
-    //     return;
-    // }
-
     void gradient(StdTensor<GradientT> const& delta) {
-        // 1. Berechnung der Roh-Gradienten (Summen über die räumlichen Dimensionen)
         StdTensor<GradientT> temp_weight_gradient = transposed_convolution2d_gradient<GradientT::nbits, GradientT::es>(
             input, delta, stride, padding, dilation, kernel_size, kernel_size
         );
-        // sum_last2 summiert über H und W von delta -> Ergebnis: [Batch, Channels]
+
         StdTensor<GradientT> temp_bias_gradient;
 
-        // // 2. Räumliche Normalisierung berechnen
-        // // Die räumlichen Dimensionen von delta entsprechen der Ausgabegröße des Layers
-        // size_t out_h = delta.shape()[2];
-        // size_t out_w = delta.shape()[3];
-        // GradientT spatial_normalization = GradientT(out_h * out_w);
-
-        // // Gradienten durch die Anzahl der Pixel teilen (Mean über die Fläche)
-        // temp_weight_gradient /= spatial_normalization;
-        // temp_bias_gradient /= spatial_normalization;
-
-        // 3. Batch-Normalisierung (wie bisher)
         if(input.dim() > 1 && input.shape()[0] > 1){
-            //GradientT batch_size = GradientT(input.shape()[0]);
-            
-            //temp_weight_gradient /= batch_size;
-
-            // sum_first summiert über die Batch-Dimension -> Ergebnis: [Channels]
             temp_bias_gradient = sum_first(delta);
             temp_bias_gradient = sum_last2(temp_bias_gradient);
-            //temp_bias_gradient /= batch_size; //Keine Normalisierung
         }else{
             temp_bias_gradient = sum_last2(delta);
         }
 
-        // 4. Akkumulation in die Layer-Parameter
         weight_gradient += temp_weight_gradient;
         bias_gradient += temp_bias_gradient;
 
@@ -164,7 +111,6 @@ private:
     StdTensor<GradientT> input;
     StdTensor<OptimizerT> weight_gradient;
     StdTensor<OptimizerT> bias_gradient;
-    Window w;
 };
 
 #endif /* TRANSPOSED_CONV2D_HPP */

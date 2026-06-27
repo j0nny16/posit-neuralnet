@@ -33,7 +33,7 @@ public:
 		for(size_t i=0, size=x.size(); i<size; i++) {
 			if (x[i].isnar()) {
 				std::cerr << "[Sigmoid NaR]: NaR vor Sigmoid Funktion gefunden! " << "\n";
-				inspect_tensor(x);
+				inspect_tensor_detailed(x);
                 y[i] = ForwardT(0.5); // Sicherer Fallback (Mittelpunkt der Sigmoid)
                 continue;
             }

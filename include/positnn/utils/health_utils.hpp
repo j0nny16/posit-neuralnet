@@ -11,13 +11,13 @@
 #include "../tensor/StdTensor.hpp"
 #include "../layer/Layer.hpp"
 
-// Stats and Overflow Detection
-
-// Struktur zur Speicherung aller numerischen Kennzahlen eines Tensors
 struct TensorStats {
-    double max_abs = 0.0;
-    double min_abs_nonzero = std::numeric_limits<double>::max();
+    double max_val = -std::numeric_limits<double>::max();
+    double min_val = std::numeric_limits<double>::max();
+    double min_pos_nonzero = std::numeric_limits<double>::max();
+    double max_neg_nonzero = -std::numeric_limits<double>::max();
     double mean = 0.0;
+    double stddev = 0.0;
     size_t nar_count = 0;
     size_t zero_count = 0;
     size_t total_elements = 0;
@@ -28,7 +28,7 @@ struct TensorStats {
 };
 
 template<typename T>
-TensorStats inspect_tensor(const StdTensor<T>& tensor) {
+TensorStats inspect_tensor_detailed(const StdTensor<T>& tensor) {
     TensorStats stats;
     stats.total_elements = tensor.size();
     if (stats.total_elements == 0) return stats;
@@ -36,81 +36,117 @@ TensorStats inspect_tensor(const StdTensor<T>& tensor) {
     double sum = 0.0;
     size_t valid_count = 0;
 
-    for (size_t i = 0; i < tensor.size(); ++i) {
-        // NaR-Erkennung (Priorität bei Posits)
+    for (size_t i = 0; i < stats.total_elements; ++i) {
         if (tensor[i].isnar()) {
             stats.nar_count++;
             continue;
         }
 
         double val = static_cast<double>(tensor[i]);
-        double abs_val = std::abs(val);
-
-        // Null- vs. Kleinstwert-Erkennung (Underflow-Metrik)
-        if (abs_val == 0.0) {
+        if (val == 0.0) {
             stats.zero_count++;
         } else {
-            if (abs_val < stats.min_abs_nonzero) {
-                stats.min_abs_nonzero = abs_val;
-            }
+            if (val > 0.0 && val < stats.min_pos_nonzero) stats.min_pos_nonzero = val;
+            if (val < 0.0 && val > stats.max_neg_nonzero) stats.max_neg_nonzero = val;
         }
 
-        // Maximalwert-Erkennung (Overflow-Metrik)
-        if (abs_val > stats.max_abs) {
-            stats.max_abs = abs_val;
-        }
+        if (val > stats.max_val) stats.max_val = val;
+        if (val < stats.min_val) stats.min_val = val;
 
         sum += val;
         valid_count++;
     }
 
-    // Mittelwert berechnen (ohne NaRs)
     if (valid_count > 0) {
         stats.mean = sum / valid_count;
+        double variance_sum = 0.0;
+        for (size_t i = 0; i < stats.total_elements; ++i) {
+            if (!tensor[i].isnar()) {
+                double val = static_cast<double>(tensor[i]);
+                variance_sum += (val - stats.mean) * (val - stats.mean);
+            }
+        }
+        stats.stddev = std::sqrt(variance_sum / valid_count);
     }
-    
-    // Falls keine Werte ungleich Null gefunden wurden, korrigieren
-    if (stats.min_abs_nonzero == std::numeric_limits<double>::max()) {
-        stats.min_abs_nonzero = 0.0;
-    }
+
+    if (stats.min_pos_nonzero == std::numeric_limits<double>::max()) stats.min_pos_nonzero = 0.0;
+    if (stats.max_neg_nonzero == -std::numeric_limits<double>::max()) stats.max_neg_nonzero = 0.0;
+    if (stats.max_val == -std::numeric_limits<double>::max()) stats.max_val = 0.0;
+    if (stats.min_val == std::numeric_limits<double>::max()) stats.min_val = 0.0;
 
     return stats;
 }
 
 template<typename T>
-bool validate_tensor(const StdTensor<T>& tensor, const std::string& label, const std::string& context) {
-    
-    #ifdef VALIDATE
-    if(!VALIDATE) return true;
-    #endif
-
-    size_t first_nar_idx = 0;
-    size_t total_nars = 0;
-    bool found_nar = false;
-
-    // Schneller Loop zur Lokalisierung
-    for (size_t i = 0; i < tensor.size(); ++i) {
-        if (tensor[i].isnar()) {
-            if (!found_nar) {
-                first_nar_idx = i;
-                found_nar = true;
-            }
-            total_nars++;
+double calculate_update_ratio(const std::vector<double>& old_weights_raw, const StdTensor<T>& new_weights) {
+    if (old_weights_raw.size() != new_weights.size() || old_weights_raw.empty()) return 0.0;
+    size_t changed = 0;
+    for (size_t i = 0; i < old_weights_raw.size(); ++i) {
+        if (old_weights_raw[i] != static_cast<double>(new_weights[i])) {
+            changed++;
         }
     }
-
-    if (found_nar) {
-        std::cerr << "\n" << std::string(30, '!') << " NaR DETECTED " << std::string(30, '!') << std::endl;
-        std::cerr << "CONTEXT: " << context << " | TENSOR: " << label << std::endl;
-        std::cerr << "SHAPE:   ";
-        for (auto s : tensor.shape()) std::cerr << s << " ";
-        std::cerr << "\nFirst NaR at flat index: " << first_nar_idx << std::endl;
-        std::cerr << "TOTAL NaRs in this tensor: " << total_nars << " / " << tensor.size() << std::endl;
-        std::cerr << std::string(72, '!') << std::endl;
-        return false; // Validierung fehlgeschlagen
-    }
-    
-    return true; // Alles sauber
+    return (100.0 * changed) / old_weights_raw.size();
 }
 
-#endif //HEALTH_UTILS_HPP
+template<typename T>
+void log_detailed_health(Layer<T>& net, const std::vector<double>& update_ratios = {}) {
+    auto& all_params = net.parameters();
+    
+    std::cout << "\n" << std::string(100, '=') << "\n";
+    std::cout << "                             DETAILED POSIT HEALTH REPORT                             \n";
+    std::cout << std::string(100, '=') << "\n";
+
+    for (size_t i = 0; i < all_params.size(); ++i) {
+        auto& p = all_params[i];
+        TensorStats w_stats = inspect_tensor_detailed(p.weight);
+        TensorStats g_stats = inspect_tensor_detailed(p.gradient);
+
+        std::cout << "Layer " << i << " Parameters (W: " << p.weight.size() << " | G: " << p.gradient.size() << " elements):\n";
+        
+        // --- WICHTIG: Wissenschaftliche Notation für präzise Einblicke in den Underflow ---
+        std::cout << std::scientific << std::setprecision(4);
+        
+        std::cout << "  [WEIGHTS]  "
+                  << "Min: " << std::setw(12) << w_stats.min_val << " | "
+                  << "Max: " << std::setw(12) << w_stats.max_val << " | "
+                  << "Mean: " << std::setw(12) << w_stats.mean << " | "
+                  << "StdDev: " << std::setw(12) << w_stats.stddev << "\n";
+        std::cout << "             "
+                  << "Closest to 0 (+/-): [+" << w_stats.min_pos_nonzero << ", " << w_stats.max_neg_nonzero << "]\n";
+        
+        // Kurz auf normale % Formatierung umschalten
+        std::cout << std::defaultfloat << std::fixed << std::setprecision(2);
+        std::cout << "             "
+                  << "Zeros: " << w_stats.zero_ratio() << "% | "
+                  << "NaRs: " << w_stats.nar_count << "\n";
+
+        // Wieder zurück auf wissenschaftliche Notation für die winzigen Gradienten
+        std::cout << std::scientific << std::setprecision(4);
+        
+        std::cout << "  [GRADS]    "
+                  << "Min: " << std::setw(12) << g_stats.min_val << " | "
+                  << "Max: " << std::setw(12) << g_stats.max_val << " | "
+                  << "Mean: " << std::setw(12) << g_stats.mean << " | "
+                  << "StdDev: " << std::setw(12) << g_stats.stddev << "\n";
+        std::cout << "             "
+                  << "Closest to 0 (+/-): [+" << g_stats.min_pos_nonzero << ", " << g_stats.max_neg_nonzero << "]\n";
+        
+        std::cout << std::defaultfloat << std::fixed << std::setprecision(2);
+        std::cout << "             "
+                  << "Zeros: " << g_stats.zero_ratio() << "% | "
+                  << "NaRs: " << g_stats.nar_count << "\n";
+
+        if (i < update_ratios.size()) {
+            std::cout << "  [UPDATE]   " 
+                      << "Ratio of weights modified in last step: " 
+                      << update_ratios[i] << "%\n";
+        }
+        std::cout << std::string(100, '-') << "\n";
+        
+        // Reset für nächste Iteration
+        std::cout << std::defaultfloat; 
+    }
+}
+
+#endif // HEALTH_UTILS_HPP

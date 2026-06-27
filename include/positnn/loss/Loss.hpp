@@ -16,8 +16,12 @@ public:
 	virtual ~Loss() {}
 
 	template <typename Model>
-	void backward(Model& model) {
+	void backward(Model& model, double loss_scale=1.0) {
 		StdTensor<BackwardT> dloss = derivative();
+
+		if (loss_scale != 1.0) {
+			dloss *= BackwardT(loss_scale);
+		}
 
 		model.backward(dloss);
 
