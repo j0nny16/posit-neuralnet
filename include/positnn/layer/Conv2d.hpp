@@ -9,6 +9,7 @@
 #include "init.hpp"
 #include "Layer.hpp"
 #include "../tensor/convolution.hpp"
+#include "../tensor/transposed_convolution.hpp"   // Input-Gradient = transponierte Konvolution
 #include "../tensor/MixedTensor.hpp"
 #include "../tensor/sum.hpp"
 #include "../tensor/StdTensor.hpp"
@@ -79,52 +80,61 @@ public:
 		// 1. Berechnet die Gradienten für Gewichte und Bias
 		gradient(delta);
 		
-		// 2. Berechnet den Gradienten bezüglich des Inputs (Das ist der Wert, der evtl. zu klein ist)
-		StdTensor<BackwardT> rotated = rotate_weight(weight.get_backward());
-		StdTensor<BackwardT> input_gradient = convolution2d<BackwardT::nbits, BackwardT::es>(
-			delta, rotated, StdTensor<BackwardT>(), 1, (kernel_size-1)*dilation-padding, stride, dilation, &w3
+		// 2. Gradient bzgl. Input. Der Input-Gradient einer Conv IST eine transponierte
+		//    Konvolution des Deltas mit dem Conv-Gewicht (der tconv-Gather erledigt die
+		//    Transposition; KEIN manuelles rotate_weight noetig). output_padding gleicht
+		//    die Forward-Floor-Division exakt aus, sodass die Original-Input-Groesse
+		//    herauskommt. Nutzt die gegen PyTorch verifizierte transposed_convolution2d.
+		//
+		//    BUGFIX: ersetzt den alten convolution2d+rotate_weight+„dimension fix"-Pfad,
+		//    der bei stride>1 die fehlenden Randzeilen mit 0 auffuellte — obwohl diese
+		//    Input-Positionen sehr wohl zu einem Output beitragen (Floor-Off-by-one).
+		//    Das nullte beitragende Gradienten und korrumpierte die Gradienten der
+		//    VORGELAGERTEN Layer (z.B. conv1 ueber conv2.backward). Siehe
+		//    comparisons/src/tests/compare_cdae_precision.cpp und compare_conv.cpp.
+		if (saved_input_shape.empty())
+			throw std::runtime_error("[Conv2d Fatal Error] saved_input_shape is empty!");
+
+		// output_padding so, dass die transponierte Konvolution exakt die Input-Hoehe
+		// trifft (quadratisch angenommen, konsistent zur Layer-API).
+		size_t const op_base = (delta.shape()[2]-1)*stride - 2*padding + dilation*(kernel_size-1) + 1;
+		size_t const output_padding = saved_input_shape[2] - op_base;
+
+		StdTensor<BackwardT> input_gradient = transposed_convolution2d<BackwardT::nbits, BackwardT::es>(
+			delta, weight.get_backward(), StdTensor<BackwardT>(),
+			stride, padding, output_padding, dilation, &w3
 		);
 
-		// 3. DIMENSION FIX: Gradienten auffüllen, falls Stride > 1 Pixel geschluckt hat
-		if (saved_input_shape.empty()) {
-        	throw std::runtime_error("[Conv2d Fatal Error] saved_input_shape is empty!");
-    }
-		
-		if (input_gradient.shape() != this->saved_input_shape) {
-			
-			// Leeren Tensor in der exakten Zielgröße erstellen
-			StdTensor<BackwardT> corrected_grad(this->saved_input_shape);
-			
-			// Zur Sicherheit alles explizit mit 0 initialisieren
-			corrected_grad.set(BackwardT(0));
-			
-			// Grenzen des berechneten (zu kleinen) Gradienten
-			size_t b_max = input_gradient.shape()[0];
-			size_t c_max = input_gradient.shape()[1];
-			size_t h_max = input_gradient.shape()[2];
-			size_t w_max = input_gradient.shape()[3];
-
-			// Die vorhandenen Werte rüberkopieren. 
-			// Die fehlenden Zeilen/Spalten am rechten und unteren Rand bleiben 0.
-			for(size_t b = 0; b < b_max; ++b) {
-				for(size_t c = 0; c < c_max; ++c) {
-					for(size_t h = 0; h < h_max; ++h) {
-						for(size_t w = 0; w < w_max; ++w) {
-							corrected_grad[{b, c, h, w}] = input_gradient[{b, c, h, w}];
-						}
-					}
-				}
-			}
-			
-			// Den zu kleinen Tensor mit der korrigierten Version überschreiben
-			input_gradient = corrected_grad;
-		}
+		// ALT (fehlerhaft bei stride>1: nullte beitragende Randzeilen/-spalten):
+		// StdTensor<BackwardT> rotated = rotate_weight(weight.get_backward());
+		// StdTensor<BackwardT> input_gradient = convolution2d<BackwardT::nbits, BackwardT::es>(
+		// 	delta, rotated, StdTensor<BackwardT>(), 1, (kernel_size-1)*dilation-padding, stride, dilation, &w3 );
+		// if (input_gradient.shape() != this->saved_input_shape) {
+		// 	StdTensor<BackwardT> corrected_grad(this->saved_input_shape);
+		// 	corrected_grad.set(BackwardT(0));
+		// 	size_t b_max = input_gradient.shape()[0], c_max = input_gradient.shape()[1];
+		// 	size_t h_max = input_gradient.shape()[2], w_max = input_gradient.shape()[3];
+		// 	for(size_t b=0;b<b_max;++b) for(size_t c=0;c<c_max;++c)
+		// 		for(size_t h=0;h<h_max;++h) for(size_t w=0;w<w_max;++w)
+		// 			corrected_grad[{b,c,h,w}] = input_gradient[{b,c,h,w}];
+		// 	input_gradient = corrected_grad;
+		// }
 
 		return input_gradient;
 	}
 
 	void gradient(StdTensor<GradientT> const& delta) {
-		StdTensor<GradientT> temp_weight_gradient = convolution2d_gradient(input, delta, stride, padding, dilation, &w2);
+		// BUGFIX (stride>1): convolution2d_gradient liefert bei nicht durch den Stride
+		// teilbarer Forward-Floor-Division eine zu grosse Kernel-Gradientform (z.B. 4x4
+		// statt 3x3 bei k3/s2). Das anschliessende `weight_gradient += temp_...` addiert
+		// dann groessenungleich (StdTensor::operator+= laeuft per flachem Index) und
+		// korrumpiert den Gewichts-Gradienten. Korrekt ist das obere-linke
+		// kernel_size x kernel_size (verifiziert gegen PyTorch in tests/compare_conv.cpp).
+		// ALT (fehlerhaft bei stride>1):
+		// StdTensor<GradientT> temp_weight_gradient = convolution2d_gradient(input, delta, stride, padding, dilation, &w2);
+		StdTensor<GradientT> temp_weight_gradient =
+			crop_weight_gradient(convolution2d_gradient(input, delta, stride, padding, dilation, &w2),
+								 kernel_size, kernel_size);
 		StdTensor<GradientT> temp_bias_gradient = sum_last2(delta);
 
 		// If there are many samples
