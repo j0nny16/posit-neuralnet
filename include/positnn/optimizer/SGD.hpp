@@ -1,6 +1,10 @@
 #ifndef SGD_HPP
 #define SGD_HPP
 
+// General headers
+#include <iostream>
+#include <cstdlib>
+
 // Custom headers
 #include "../layer/Parameter.hpp"
 #include "../optimizer/Optimizer.hpp"
@@ -51,7 +55,13 @@ public:
 
 private:
 
-	void update_parameter(Parameter<T>& p, size_t const i) override {
+	void update_parameter(Parameter<T>& p, size_t const i, double loss_scale=1.0) override {
+		// Loss-Scaling ist nur fuer Adam implementiert.
+		if(loss_scale != 1.0){
+			std::cerr << "[SGD] loss_scale != 1.0 wird nicht unterstuetzt (nur Adam)." << std::endl;
+			std::abort();
+		}
+
 		T const pOne(1);
 		StdTensor<T> dweight = p.gradient;
 

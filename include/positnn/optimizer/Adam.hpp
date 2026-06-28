@@ -1,14 +1,12 @@
 #ifndef ADAM_HPP
 #define ADAM_HPP
 
-//#include <vector>
-//#include <cmath>
 #include "../layer/Parameter.hpp"
 #include "../optimizer/Optimizer.hpp"
 #include "../tensor/StdTensor.hpp"
+#include "../tensor/matrix.hpp"      // fused()
 
 using namespace sw::unum;
-
 
 template <typename T>
 struct AdamOptions {
@@ -17,126 +15,109 @@ struct AdamOptions {
         beta_1(T(_beta_1)),
         beta_2(T(_beta_2)),
         eps(T(_eps)),
-        t(0) 
+        t(0)
     { }
 
     T learning_rate;
     T beta_1;
     T beta_2;
     T eps;
-    size_t t; 
+    size_t t;
 };
 
+// ============================================================================
+//  Adam-Optimizer.
+//
+//  Die Momenten-Updates nutzen fused() aus matrix.hpp:
+//      m = m*beta1 + g *(1-beta1)
+//      v = v*beta2 + g²*(1-beta2)
+//  Beide Produkte werden im Quire exakt akkumuliert und genau EINMAL gerundet
+//  (statt 3-4 Rundungen bei naiver element-weiser Rechnung). Konsistent zu SGD,
+//  das ebenfalls durchgaengig fused() verwendet.
+//
+//  Das Gewichts-Update braucht sqrt und Division und bleibt element-weise.
+//  Die Bias-Korrektur haengt nur vom globalen Schritt t ab und wird deshalb
+//  EINMAL pro step() berechnet (nicht pro Layer); beta^t wird inkrementell
+//  fortgeschrieben (eine Multiplikation/Schritt statt posit_pow in O(t)).
+// ============================================================================
 template <typename T>
 class Adam : public Optimizer<T> {
 public:
-    Adam(std::vector<Parameter<T>> parameters0, AdamOptions<T> options0) : 
+    Adam(std::vector<Parameter<T>> parameters0, AdamOptions<T> options0) :
         Optimizer<T>(parameters0),
-        _options(options0)
+        _options(options0),
+        _one_minus_beta1(T(1) - options0.beta_1),
+        _one_minus_beta2(T(1) - options0.beta_2),
+        _beta1_t(T(1)),
+        _beta2_t(T(1)),
+        _bias_corr1(T(1)),
+        _bias_corr2(T(1))
     {
-        /* * INITIALISIERUNG:
-         * Anders als SGD benötigt Adam zwei Status-Buffer (m und v) pro Parameter.
-         * Da StdTensor beim einfachen resize() keinen Speicher für Elemente reserviert,
-         * müssen wir hier explizit die Dimensionen des Ziel-Parameters übergeben.
-         */
+        // Adam braucht zwei Status-Buffer (m, v) pro Parameter, mit 0 initialisiert.
         for (auto const& p : this->_parameters) {
             _m.push_back(StdTensor<T>(p.weight.shape()));
             _v.push_back(StdTensor<T>(p.weight.shape()));
-            
-            _m.back().clear(); 
+            _m.back().clear();
             _v.back().clear();
         }
     }
 
-    void step(double loss_scale=1.0) {
-        /*
-         * GLOBALER ZEITSCHRITT:
-         * t muss einmal pro Batch erhöht werden, nicht pro Parameter-Update.
-         * Danach rufen wir die Basisklasse auf, die das Multithreading startet.
-         */
+    void step(double loss_scale = 1.0) {
+        // Ein globaler Zeitschritt pro Batch.
         _options.t++;
-        Optimizer<T>::step(loss_scale); 
+
+        // beta^t inkrementell (O(1) statt posit_pow in O(t)); Bias-Korrektur einmal
+        // pro Schritt, da nur von t abhaengig (gilt fuer alle Layer gleich).
+        _beta1_t *= _options.beta_1;
+        _beta2_t *= _options.beta_2;
+        T const one(1);
+        _bias_corr1 = one / (one - _beta1_t);
+        _bias_corr2 = one / (one - _beta2_t);
+
+        Optimizer<T>::step(loss_scale);   // verteilt update_parameter auf Threads
     }
 
     AdamOptions<T>& options() { return _options; }
 
+    // Lesezugriff auf die Momenten-Buffer (fuer Analyse/Tests)
+    std::vector<StdTensor<T>> const& moments_m() const { return _m; }
+    std::vector<StdTensor<T>> const& moments_v() const { return _v; }
+
 private:
-    void update_parameter(Parameter<T>& p, size_t const i, double loss_scale=1.0) override {
-        /*
-         * MULTITHREADING-KONTEXT:
-         * Diese Funktion wird von einem Thread für EINEN spezifischen Parameter (Layer) aufgerufen.
-         * Das Objekt 'p' enthält alle Gewichte dieses Layers (z.B. eine 784x512 Matrix).
-         */
-        StdTensor<T>& weights = p.weight;
-        StdTensor<T>& grad = p.gradient;
+    void update_parameter(Parameter<T>& p, size_t const i, double loss_scale = 1.0) override {
+        StdTensor<T>& w = p.weight;
         StdTensor<T>& m = _m[i];
         StdTensor<T>& v = _v[i];
 
-        T beta1 = _options.beta_1;
-        T beta2 = _options.beta_2;
-        T eps = _options.eps;
-        T lr = _options.learning_rate;
-        T const one = T(1.0);
+        // Skalierte Gradienten (Loss-Scaling rueckgaengig). Bei scale==1 keine Kosten.
+        StdTensor<T> g = p.gradient;
+        if (loss_scale != 1.0)
+            g *= T(1.0 / loss_scale);
 
-        // Vorberechnen der Bias-Korrektur (Skalare)
-        auto posit_pow = [](T base, size_t exp) {
-            T res = T(1.0);
-            for (size_t k = 0; k < exp; ++k) res *= base;
-            return res;
-        };
+        // Momenten-Updates: fused (Quire, je eine Rundung)
+        fused(m, g, _options.beta_1, _one_minus_beta1);     // m = m*b1 + g*(1-b1)
+        StdTensor<T> g2 = g * g;
+        fused(v, g2, _options.beta_2, _one_minus_beta2);    // v = v*b2 + g2*(1-b2)
 
-        T bias_corr1 = one / (one - posit_pow(beta1, _options.t));
-        T bias_corr2 = one / (one - posit_pow(beta2, _options.t));
-
-        T inv_scale = T(1.0 / loss_scale);
-
-        /*
-         * WARUM EIN EXPLIZITER LOOP STATT FUSED()?
-         * * 1. Funktionalität: Die Methode fused() in PositNN kann nur (A = A*x + B).
-         * Adam benötigt aber Wurzeln (sqrt) und Divisionen. Diese Operationen
-         * existieren nicht als 'fused'-Tensor-Befehle in StdTensor.hpp.
-         * * 2. Cache-Effizienz (Kernel Fusion): 
-         * Würden wir mehrere separate Tensor-Befehle nutzen (einen für m, einen für v, 
-         * einen für sqrt, etc.), müsste die CPU die riesigen Datenmengen 5-6 Mal aus 
-         * dem RAM lesen und zurückschreiben (Memory Bandwidth Bottleneck).
-         * * 3. Der manuelle Loop erlaubt es, ein einzelnes Gewicht j in ein CPU-Register zu laden,
-         * ALLE Adam-Berechnungen durchzuführen und das Ergebnis EINMAL zurückzuschreiben.
-         * Das ist um ein Vielfaches schneller.
-         */
-        for (size_t j = 0; j < weights.size(); ++j) {
-            T g = grad[j] * inv_scale;
-
-            // Update m (1. Moment - Momentum)
-            m[j] = beta1 * m[j] + (T(1.0) - beta1) * g;
-
-            // Update v (2. Moment - Unzentrierte Varianz)
-            v[j] = beta2 * v[j] + (T(1.0) - beta2) * (g * g);
-
-            // Bias-Korrektur anwenden
-            T m_hat = m[j] * bias_corr1;
-            T v_hat = v[j] * bias_corr2;
-
-            // Das eigentliche Gewichtsupdate
-            using sw::unum::sqrt;
-
-            T denom = sqrt(v_hat) + eps;
-
-            // DEBUG: Prüfung auf Division durch Null oder NaR
-            if (denom == T(0) || weights[j].isnar() || denom.isnar()) {
-                std::cerr << "0 or NaR" << std::endl;
-                continue; 
-            }
-
-            //weights[j] = weights[j] - (lr * m_hat) / (sqrt(v_hat) + eps);
-            weights[j] = weights[j] - (lr * m_hat) / denom;
+        // Gewichts-Update: sqrt + Division, zwingend element-weise
+        T const lr  = _options.learning_rate;
+        T const eps = _options.eps;
+        using sw::unum::sqrt;
+        for (size_t j = 0, n = w.size(); j < n; ++j) {
+            T m_hat = m[j] * _bias_corr1;
+            T v_hat = v[j] * _bias_corr2;
+            w[j] = w[j] - (lr * m_hat) / (sqrt(v_hat) + eps);
         }
 
-        p.update();
+        p.update();   // Mixed-Precision: ggf. Forward/Backward-Gewichte aktualisieren
     }
 
     AdamOptions<T> _options;
-    std::vector<StdTensor<T>> _m; 
-    std::vector<StdTensor<T>> _v; 
+    std::vector<StdTensor<T>> _m;
+    std::vector<StdTensor<T>> _v;
+    T _one_minus_beta1, _one_minus_beta2;   // Konstanten (einmal berechnet)
+    T _beta1_t, _beta2_t;                   // beta^t, inkrementell fortgeschrieben
+    T _bias_corr1, _bias_corr2;             // pro step() gesetzt, in update_parameter nur gelesen
 };
 
-#endif
+#endif /* ADAM_HPP */
