@@ -105,21 +105,6 @@ public:
 			stride, padding, output_padding, dilation, &w3
 		);
 
-		// ALT (fehlerhaft bei stride>1: nullte beitragende Randzeilen/-spalten):
-		// StdTensor<BackwardT> rotated = rotate_weight(weight.get_backward());
-		// StdTensor<BackwardT> input_gradient = convolution2d<BackwardT::nbits, BackwardT::es>(
-		// 	delta, rotated, StdTensor<BackwardT>(), 1, (kernel_size-1)*dilation-padding, stride, dilation, &w3 );
-		// if (input_gradient.shape() != this->saved_input_shape) {
-		// 	StdTensor<BackwardT> corrected_grad(this->saved_input_shape);
-		// 	corrected_grad.set(BackwardT(0));
-		// 	size_t b_max = input_gradient.shape()[0], c_max = input_gradient.shape()[1];
-		// 	size_t h_max = input_gradient.shape()[2], w_max = input_gradient.shape()[3];
-		// 	for(size_t b=0;b<b_max;++b) for(size_t c=0;c<c_max;++c)
-		// 		for(size_t h=0;h<h_max;++h) for(size_t w=0;w<w_max;++w)
-		// 			corrected_grad[{b,c,h,w}] = input_gradient[{b,c,h,w}];
-		// 	input_gradient = corrected_grad;
-		// }
-
 		return input_gradient;
 	}
 
