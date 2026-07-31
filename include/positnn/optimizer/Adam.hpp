@@ -83,6 +83,43 @@ public:
     std::vector<StdTensor<T>> const& moments_m() const { return _m; }
     std::vector<StdTensor<T>> const& moments_v() const { return _v; }
 
+    // ------------------------------------------------------------------------
+    //  Serialisierung des Optimizer-Zustands (fuer Checkpoint/Resume).
+    //
+    //  Ohne m, v und t ist ein fortgesetzter Lauf KEIN fortgesetzter Lauf: Adam
+    //  faengt mit leeren Momenten wieder bei der Bias-Korrektur von t=1 an und
+    //  macht ein paar unverhaeltnismaessig grosse Schritte. Bei einem GAN reicht
+    //  das, um ein austariertes Gleichgewicht zu zerstoeren.
+    //
+    //  Format: t, dann je Parameter m und v. Die Bias-Korrektur-Faktoren werden
+    //  aus t rekonstruiert statt mitgeschrieben (haengen nur von t und den betas
+    //  ab, und die kommen ohnehin aus der Config).
+    // ------------------------------------------------------------------------
+    template <typename PositFile=T>
+    void write(std::ostream& out) {
+        size_t const t = _options.t;
+        out.write((char*)&t, sizeof(t));
+        for (StdTensor<T>& m : _m) m.template write<PositFile>(out);
+        for (StdTensor<T>& v : _v) v.template write<PositFile>(out);
+    }
+
+    template <typename PositFile=T>
+    void read(std::istream& in) {
+        size_t t = 0;
+        in.read((char*)&t, sizeof(t));
+        _options.t = t;
+        for (StdTensor<T>& m : _m) m.template read<PositFile>(in);
+        for (StdTensor<T>& v : _v) v.template read<PositFile>(in);
+
+        // beta^t nachziehen, damit die Bias-Korrektur im naechsten step() stimmt
+        _beta1_t = T(1);
+        _beta2_t = T(1);
+        for (size_t i = 0; i < t; ++i) {
+            _beta1_t *= _options.beta_1;
+            _beta2_t *= _options.beta_2;
+        }
+    }
+
 private:
     void update_parameter(Parameter<T>& p, size_t const i, double loss_scale = 1.0) override {
         StdTensor<T>& w = p.weight;

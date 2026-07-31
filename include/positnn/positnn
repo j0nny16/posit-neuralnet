@@ -4,6 +4,7 @@
 //namespace positnn {
 
 // Activation functions
+#include "activation/LeakyReLU.hpp"
 #include "activation/LogSoftmax.hpp"
 #include "activation/ReLU.hpp"
 #include "activation/Sigmoid.hpp"
@@ -13,6 +14,7 @@
 #include "layer/AdaptiveScale.hpp"
 #include "layer/AvgPool2d.hpp"
 #include "layer/BatchNorm1d.hpp"
+#include "layer/BatchNorm2d.hpp"
 #include "layer/BackScale.hpp"
 #include "layer/Conv2d.hpp"
 #include "layer/Transposed_Conv2d.hpp"
@@ -25,6 +27,7 @@
 #include "layer/RangeBatchNorm1d.hpp"
 
 // Loss functions
+#include "loss/BCELoss.hpp"
 #include "loss/CrossEntropyLoss.hpp"
 #include "loss/MSELoss.hpp"
 #include "loss/NLLLoss.hpp"
