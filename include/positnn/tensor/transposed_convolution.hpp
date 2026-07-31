@@ -17,35 +17,32 @@
 // Custom headers
 #include "StdTensor.hpp"
 #include "Window.hpp"
-#include "convolution.hpp"		// reuse do_convolution (Quire-Akkumulation pro Output)
+#include "convolution.hpp"		// reuse do_convolution
 #include "../utils/Quire.hpp"
 
 // Namespaces
 using namespace sw::unum;
 
 // ============================================================================
-//  Designidee
-//  -----------
-//  Die transponierte Konvolution ist im Kern dieselbe korrelationsartige
-//  Schleife wie die regulaere Konvolution, nur mit vertauschten Rollen. Statt
-//  in jeder zentralen Schleife pro Ausgabewert die Gather-Indizes per
-//  Modulo-Arithmetik neu zu berechnen, wird die Index-Abbildung EINMAL pro
-//  Geometrie in eine `Window` ausgerollt (skippt ungueltige/Null-Beitraege
-//  bereits zur Bauzeit) und danach von `do_convolution` flach durchlaufen.
+//  A transposed convolution is the same correlation-style loop as a regular
+//  convolution with the roles of input and output swapped. Instead of redoing
+//  the modulo arithmetic for every output value, the index mapping is unrolled
+//  once per geometry into a Window (invalid and zero contributions are dropped
+//  at build time) and then traversed flatly by do_convolution, exactly as in
+//  convolution.hpp.
 //
-//  Drei Windows (alle nutzen das gleiche (map_window, kernel_window,
-//  window_idx)-Layout, nur mit unterschiedlicher Semantik der Buckets):
-//    forward      : Bucket = Output-Pixel   -> Paare (Input-Pixel,  Kernel-Pos)
-//    grad_input   : Bucket = Input-Pixel     -> Paare (Delta-Pixel,  Kernel-Pos)
-//    grad_weight  : Bucket = Kernel-Position -> Paare (Input-Pixel,  Delta-Pixel)
+//  Three windows, all using the same (map_window, kernel_window, window_idx)
+//  layout, only the meaning of a bucket differs:
+//    forward      bucket = output pixel     -> pairs (input pixel, kernel pos)
+//    grad_input   bucket = input pixel      -> pairs (delta pixel, kernel pos)
+//    grad_weight  bucket = kernel position  -> pairs (input pixel, delta pixel)
 //
-//  Die Windows haengen nur von der Geometrie ab und werden vom Layer als
-//  Member gecacht (analog Conv2d w1/w2/w3) -> im Training nur einmal gebaut.
-//  Alle Parameter sind quadratisch (kernel/stride/padding/dilation), passend
-//  zur Layer-API und zum restlichen Framework (Conv2d/AvgPool2d/MaxPool2d).
+//  The windows only depend on the geometry, so the layer caches them as members
+//  (like Conv2d w1/w2/w3) and they are built once per training run. All spatial
+//  parameters are square, consistent with the rest of the framework.
 // ============================================================================
 
-// Output-Groesse einer transponierten Konvolution entlang einer Achse.
+// Output size of a transposed convolution along one axis.
 inline size_t transposed_output_size(size_t const in, size_t const kernel,
                                      size_t const stride, size_t const padding,
                                      size_t const output_padding, size_t const dilation) {
@@ -53,11 +50,11 @@ inline size_t transposed_output_size(size_t const in, size_t const kernel,
 }
 
 // ----------------------------------------------------------------------------
-//  Window-Builder
+//  Window builders
 // ----------------------------------------------------------------------------
 
-// FORWARD: pro Output-Pixel die beitragenden (Input-Pixel, Kernel-Position).
-// out[oy,ox] += sum input[iy,ix]*weight[ky,kx]  mit  iy = (oy+pad-ky*dil)/stride
+// FORWARD: per output pixel, the contributing (input pixel, kernel position).
+// out[oy,ox] += sum input[iy,ix]*weight[ky,kx]  with  iy = (oy+pad-ky*dil)/stride
 inline void build_transposed_forward_window(Window& w,
                                             size_t const in_h, size_t const in_w,
                                             size_t const out_h, size_t const out_w,
@@ -89,8 +86,8 @@ inline void build_transposed_forward_window(Window& w,
 					size_t const ix = static_cast<size_t>(x_un / s);
 					if(ix >= in_w) continue;
 
-					w.map_window.push_back(iy * in_w + ix);		// Input-Pixel (innerhalb Kanal)
-					w.kernel_window.push_back(ky * kernel + kx);	// Kernel-Position (innerhalb ic/oc-Block)
+					w.map_window.push_back(iy * in_w + ix);		// input pixel, within channel
+					w.kernel_window.push_back(ky * kernel + kx);	// kernel position, within ic/oc block
 					size++;
 				}
 			}
@@ -104,8 +101,8 @@ inline void build_transposed_forward_window(Window& w,
 	w.initialized = true;
 }
 
-// GRAD-INPUT: pro Input-Pixel die beitragenden (Delta-Pixel, Kernel-Position).
-// grad_in[ih,iw] += sum delta[oh,ow]*weight[kh,kw]  mit  oh = ih*stride+kh*dil-pad
+// GRAD-INPUT: per input pixel, the contributing (delta pixel, kernel position).
+// grad_in[ih,iw] += sum delta[oh,ow]*weight[kh,kw]  with  oh = ih*stride+kh*dil-pad
 inline void build_transposed_grad_input_window(Window& w,
                                                size_t const in_h, size_t const in_w,
                                                size_t const out_h, size_t const out_w,
@@ -132,8 +129,8 @@ inline void build_transposed_grad_input_window(Window& w,
 					ptrdiff_t const ow = static_cast<ptrdiff_t>(iw * stride + kw * dilation) - static_cast<ptrdiff_t>(padding);
 					if(ow < 0 || static_cast<size_t>(ow) >= out_w) continue;
 
-					w.map_window.push_back(static_cast<size_t>(oh) * out_w + static_cast<size_t>(ow));	// Delta-Pixel
-					w.kernel_window.push_back(kh * kernel + kw);										// Kernel-Position
+					w.map_window.push_back(static_cast<size_t>(oh) * out_w + static_cast<size_t>(ow));	// delta pixel
+					w.kernel_window.push_back(kh * kernel + kw);										// kernel position
 					size++;
 				}
 			}
@@ -147,8 +144,8 @@ inline void build_transposed_grad_input_window(Window& w,
 	w.initialized = true;
 }
 
-// GRAD-WEIGHT: pro Kernel-Position die Paare (Input-Pixel, Delta-Pixel).
-// dweight[kh,kw] += sum input[ih,iw]*delta[oh,ow]  mit  oh = ih*stride-pad+kh*dil
+// GRAD-WEIGHT: per kernel position, the pairs (input pixel, delta pixel).
+// dweight[kh,kw] += sum input[ih,iw]*delta[oh,ow]  with  oh = ih*stride-pad+kh*dil
 inline void build_transposed_grad_weight_window(Window& w,
                                                 size_t const in_h, size_t const in_w,
                                                 size_t const out_h, size_t const out_w,
@@ -175,8 +172,8 @@ inline void build_transposed_grad_weight_window(Window& w,
 					ptrdiff_t const ow = static_cast<ptrdiff_t>(iw * stride + kw * dilation) - static_cast<ptrdiff_t>(padding);
 					if(ow < 0 || static_cast<size_t>(ow) >= out_w) continue;
 
-					w.map_window.push_back(ih * in_w + iw);								// Input-Pixel
-					w.kernel_window.push_back(static_cast<size_t>(oh) * out_w + static_cast<size_t>(ow));	// Delta-Pixel
+					w.map_window.push_back(ih * in_w + iw);								// input pixel
+					w.kernel_window.push_back(static_cast<size_t>(oh) * out_w + static_cast<size_t>(ow));	// delta pixel
 					size++;
 				}
 			}
@@ -232,7 +229,7 @@ void transposed_convolution2d_thread(StdTensor<posit<nbits, es>> const& input,
 				size_t input_channel = input_batch;
 				size_t weight_in_channel = weight_out_channel;
 
-				// Akkumuliere alle Input-Kanaele in EINEN Quire (eine Rundung)
+				// Accumulate all input channels into a single quire (one rounding)
 				for(size_t ic=0; ic<in_channels; ic++){
 					do_convolution(input, weight, q, *w, input_channel, weight_in_channel, o);
 					input_channel    += input_channel_stride;
@@ -263,7 +260,7 @@ StdTensor<posit<nbits, es>> transposed_convolution2d(StdTensor<posit<nbits, es>>
 
 	size_t const batch_size   = input.shape()[0];
 	size_t const out_channels = weight.shape()[1];
-	size_t const kernel       = weight.shape()[2];	// quadratisch
+	size_t const kernel       = weight.shape()[2];	// square
 
 	size_t const in_h  = input.shape()[2];
 	size_t const in_w  = input.shape()[3];
@@ -321,7 +318,7 @@ StdTensor<posit<nbits, es>> transposed_convolution2d(StdTensor<posit<nbits, es>>
 }
 
 // ----------------------------------------------------------------------------
-//  GRAD-INPUT  (Gradient bzgl. der Eingabe)
+//  GRAD-INPUT
 // ----------------------------------------------------------------------------
 template <size_t nbits, size_t es>
 void transposed_convolution2d_backward_input_thread(StdTensor<posit<nbits, es>> const& grad_output,
@@ -361,7 +358,7 @@ void transposed_convolution2d_backward_input_thread(StdTensor<posit<nbits, es>> 
 				size_t grad_out_channel = grad_out_batch;
 				size_t weight_out_channel = weight_in_channel;
 
-				// Akkumuliere alle Output-Kanaele in EINEN Quire
+				// Accumulate all output channels into a single quire
 				for(size_t oc=0; oc<out_channels; oc++){
 					do_convolution(grad_output, weight, q, *w, grad_out_channel, weight_out_channel, i);
 					grad_out_channel   += grad_out_channel_stride;
@@ -442,7 +439,7 @@ StdTensor<posit<nbits, es>> transposed_convolution2d_backward_input(StdTensor<po
 }
 
 // ----------------------------------------------------------------------------
-//  GRAD-WEIGHT  (Gradient bzgl. der Gewichte)
+//  GRAD-WEIGHT
 // ----------------------------------------------------------------------------
 template <size_t nbits, size_t es>
 void transposed_convolution2d_gradient_thread(StdTensor<posit<nbits, es>> const& input,
@@ -462,7 +459,7 @@ void transposed_convolution2d_gradient_thread(StdTensor<posit<nbits, es>> const&
 
 	size_t const ksize = dweight.strides()[1];	// kernel * kernel
 
-	// dweight: [in_c, out_c, k, k]. Zerlege Startindex in (ic, oc, kernel-Position).
+	// dweight: [in_c, out_c, k, k]. Split the start index into (ic, oc, kernel pos).
 	size_t const ic0   = dweight_begin / dweight.strides()[0];
 	size_t const oc0   = (dweight_begin % dweight.strides()[0]) / dweight.strides()[1];
 	size_t const kpos0 = dweight_begin % dweight.strides()[1];
@@ -484,7 +481,7 @@ void transposed_convolution2d_gradient_thread(StdTensor<posit<nbits, es>> const&
 				size_t input_base = input_channel0;
 				size_t delta_base = delta_channel0;
 
-				// Akkumuliere ueber den ganzen Batch in EINEN Quire
+				// Accumulate over the whole batch into a single quire
 				for(size_t b=0; b<batch_size; b++){
 					do_convolution(input, delta, q, *w, input_base, delta_base, kpos);
 					input_base += input_batch_stride;

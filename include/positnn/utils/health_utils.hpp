@@ -104,7 +104,7 @@ void log_detailed_health(Layer<T>& net, const std::vector<double>& update_ratios
 
         std::cout << "Layer " << i << " Parameters (W: " << p.weight.size() << " | G: " << p.gradient.size() << " elements):\n";
         
-        // --- WICHTIG: Wissenschaftliche Notation für präzise Einblicke in den Underflow ---
+        // Scientific notation, so that underflow stays visible
         std::cout << std::scientific << std::setprecision(4);
         
         std::cout << "  [WEIGHTS]  "
@@ -115,13 +115,13 @@ void log_detailed_health(Layer<T>& net, const std::vector<double>& update_ratios
         std::cout << "             "
                   << "Closest to 0 (+/-): [+" << w_stats.min_pos_nonzero << ", " << w_stats.max_neg_nonzero << "]\n";
         
-        // Kurz auf normale % Formatierung umschalten
+        // Back to plain formatting for the percentages
         std::cout << std::defaultfloat << std::fixed << std::setprecision(2);
         std::cout << "             "
                   << "Zeros: " << w_stats.zero_ratio() << "% | "
                   << "NaRs: " << w_stats.nar_count << "\n";
 
-        // Wieder zurück auf wissenschaftliche Notation für die winzigen Gradienten
+        // Scientific notation again for the very small gradients
         std::cout << std::scientific << std::setprecision(4);
         
         std::cout << "  [GRADS]    "
@@ -144,7 +144,7 @@ void log_detailed_health(Layer<T>& net, const std::vector<double>& update_ratios
         }
         std::cout << std::string(100, '-') << "\n";
         
-        // Reset für nächste Iteration
+        // Reset for the next iteration
         std::cout << std::defaultfloat; 
     }
 }

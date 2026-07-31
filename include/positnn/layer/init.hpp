@@ -47,14 +47,11 @@ randT calculate_correct_fan(StdTensor<T>& tensor, const Mode mode) {
     size_t receptive_field_size = 1;
 
 	// TODO: SETUP FOR MORE THAN 2 DIMENSIONS
-    // if (tensor.dim() > 2) {
-	// 	receptive_field_size = 1;
-	// 	for(size_t d = 2; d < tensor.dim(); ++d)
-	// 	{
-	// 		receptive_field_size *= tensor.shape()[d];
-	//         //receptive_field_size = tensor[0][0].numel()
-	// 	}
-	// }
+	/*
+    if (tensor.dim() > 2) {
+        receptive_field_size = tensor[0][0].numel()
+	}
+	*/
 
 	size_t fan;
 

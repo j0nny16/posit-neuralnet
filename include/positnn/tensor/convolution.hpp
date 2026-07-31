@@ -570,17 +570,12 @@ StdTensor<posit<nbits, es>> convolution2d_gradient(
 
 #endif /* USING_LL_THREADS */
 
-// ============================================================================
-//  BUGFIX-Helfer (stride>1): convolution2d_gradient liefert bei einer nicht durch
-//  den Stride teilbaren Forward-Floor-Division eine ZU GROSSE Kernel-Gradient-
-//  form (z.B. 4x4 statt 3x3 bei kernel=3, stride=2): output_height/width des
-//  Gradienten-Windows werden um bis zu stride-1 zu gross. Die korrekten
-//  Gradientenwerte stehen im OBEREN-LINKEN kernel_h x kernel_w (die zusaetzlichen
-//  Zeilen/Spalten gehoeren zu Kernel-Positionen, die im Forward wegen des Floors
-//  nie existierten). Verifiziert gegen PyTorch in
-//  comparisons/src/tests/compare_conv.cpp ("grad-TopLeft-KxK" ~ 1e-7).
-//  Diese Funktion schneidet auf kernel_h x kernel_w zu (No-op, wenn passend).
-// ============================================================================
+// When the forward floor division is not exact (e.g. kernel 3, stride 2), the
+// gradient window of convolution2d_gradient is up to stride-1 too large in each
+// spatial dimension, so the returned kernel gradient is oversized (4x4 instead of
+// 3x3). The extra rows and columns belong to kernel positions that the forward
+// pass never produced; the real gradient is the top-left kernel_h x kernel_w
+// block. Crops to that block, no-op if the shape already matches.
 template <typename T>
 StdTensor<T> crop_weight_gradient(StdTensor<T> const& g, size_t const kernel_h, size_t const kernel_w) {
 	size_t const out_c = g.shape()[0];

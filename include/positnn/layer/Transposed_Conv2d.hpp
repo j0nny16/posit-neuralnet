@@ -26,7 +26,8 @@ public:
 		padding(_padding),
 		output_padding(_output_padding),
 		dilation(_dilation),
-		// Gewichtsdimensionen bei TransposedConv: (in_channels, out_channels, kernel_h, kernel_w)
+		// Weight layout is (in_channels, out_channels, kernel_h, kernel_w), i.e. the
+		// first two dimensions are swapped compared to Conv2d.
 		weight({_in_channels, _out_channels, _kernel_size, _kernel_size}),
 		bias(_out_channels),
 		weight_gradient({_in_channels, _out_channels, _kernel_size, _kernel_size}),
@@ -38,19 +39,17 @@ public:
 		reset_parameters();
 	}
 
+	// Same initialization as torch.nn.ConvTranspose2d. The bounds are computed in
+	// float so that std::sqrt can be used; leaky_relu with a=0 is equivalent to relu.
 	void reset_parameters() {
-		// Wir nutzen float fuer die Berechnung der Bounds, um std::sqrt sicher zu verwenden
-		// nonlinearity: leaky_relu mit a=0 ist identisch zu ReLU
 		kaiming_uniform<ForwardT, float>(weight.get_forward(), 0, Mode::fan_in, NonLinearity::relu);
 
-		// Initialisierung des Bias (PyTorch Style)
 		if(!bias.get_forward().empty()) {
 			float fan_in = calculate_correct_fan<ForwardT, float>(weight.get_forward(), Mode::fan_in);
 			float bound = 1.0 / std::sqrt(fan_in);
 			set_uniform<ForwardT, float>(bias.get_forward(), -bound, bound);
 		}
 
-		// Die Gewichte muessen auch fuer den Backward-Pass synchronisiert werden
 		weight.get_backward()  = weight.get_forward();
 		weight.get_optimizer() = weight.get_forward();
 		bias.get_backward()    = bias.get_forward();
@@ -109,7 +108,7 @@ private:
 	StdTensor<GradientT> input;
 	StdTensor<OptimizerT> weight_gradient;
 	StdTensor<OptimizerT> bias_gradient;
-	// Vorberechnete Gather-Maps (einmal pro Geometrie gebaut, dann gecacht)
+	// Gather maps, built once per geometry and then reused
 	Window w_forward, w_grad_input, w_grad_weight;
 };
 

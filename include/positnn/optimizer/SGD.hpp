@@ -56,9 +56,9 @@ public:
 private:
 
 	void update_parameter(Parameter<T>& p, size_t const i, double loss_scale=1.0) override {
-		// Loss-Scaling ist nur fuer Adam implementiert.
+		// Loss scaling is only implemented for Adam.
 		if(loss_scale != 1.0){
-			std::cerr << "[SGD] loss_scale != 1.0 wird nicht unterstuetzt (nur Adam)." << std::endl;
+			std::cerr << "[SGD] loss_scale != 1.0 is not supported (Adam only)." << std::endl;
 			std::abort();
 		}
 

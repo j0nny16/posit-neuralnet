@@ -41,9 +41,9 @@ public:
 	}
 
 	void step(double loss_scale=1.0) {
-		// Loss-Scaling ist nur fuer Adam implementiert.
+		// Loss scaling is only implemented for Adam.
 		if(loss_scale != 1.0){
-			std::cerr << "[SGDMixed] loss_scale != 1.0 wird nicht unterstuetzt (nur Adam)." << std::endl;
+			std::cerr << "[SGDMixed] loss_scale != 1.0 is not supported (Adam only)." << std::endl;
 			std::abort();
 		}
 

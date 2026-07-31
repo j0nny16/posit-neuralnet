@@ -13,19 +13,19 @@ public:
 	mse_loss() { }
 
 	mse_loss(StdTensor<ForwardT> const& output, StdTensor<ForwardT> const& target, Reduction reduction=Reduction::Mean) :
-		error(output.shape()), m_reduction(reduction), m_size(output.size()) // NEU
+		error(output.shape()), m_reduction(reduction), m_size(output.size())
 	{
 		size_t const size = output.size();
 
 		if(size != target.size())
 			throw std::invalid_argument( "vectors size differ" );
 
-		// Der angezeigte Loss wird in double exakt aufsummiert. Wuerde man wie
-		// frueher direkt in ein Scalar-Posit (lossT) akkumulieren, stagniert die
-		// Summe ueber ~10^5 Pixel (ULP > Summand) und der Loss-Wert wird quasi
-		// konstant/bedeutungslos. Die per-Element-Rechnung bleibt in ForwardT
-		// (posit-treu); nur die Summation ist exakt. Das Training ist unberuehrt,
-		// da der Gradient aus derivative() kommt, nicht aus diesem Scalar.
+		// The reported loss is summed in double. Accumulating directly into a
+		// scalar lossT stalls once the running sum is large enough that a single
+		// squared error falls below its ULP, which for ~10^5 elements makes the
+		// reported loss essentially constant. The per-element arithmetic stays in
+		// ForwardT, only the summation is exact, and training is unaffected since
+		// the gradient comes from derivative() rather than from this scalar.
 		double acc = 0.0;
 		for(size_t i=0; i<size; i++){
 			ForwardT error_forward = output[i] - target[i];
@@ -44,9 +44,8 @@ public:
 	StdTensor<BackwardT> derivative() {
 		StdTensor<BackwardT> dloss = error * 2;
 
-		if(m_reduction == Reduction::Mean) {
-            dloss /= BackwardT(m_size); 
-        }
+		if(m_reduction == Reduction::Mean)
+			dloss /= BackwardT(m_size);
 
 		/*
 		for(size_t i=0, size=dloss.size(); i<size; i++){
@@ -61,8 +60,8 @@ public:
 
 private:
 	StdTensor<BackwardT> error;
-	Reduction m_reduction; // <-- NEU
-    size_t m_size;         // <-- NEU
+	Reduction m_reduction;
+	size_t m_size;
 };
 
 #endif /* MSELoss_HPP */

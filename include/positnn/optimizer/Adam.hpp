@@ -25,21 +25,6 @@ struct AdamOptions {
     size_t t;
 };
 
-// ============================================================================
-//  Adam-Optimizer.
-//
-//  Die Momenten-Updates nutzen fused() aus matrix.hpp:
-//      m = m*beta1 + g *(1-beta1)
-//      v = v*beta2 + g²*(1-beta2)
-//  Beide Produkte werden im Quire exakt akkumuliert und genau EINMAL gerundet
-//  (statt 3-4 Rundungen bei naiver element-weiser Rechnung). Konsistent zu SGD,
-//  das ebenfalls durchgaengig fused() verwendet.
-//
-//  Das Gewichts-Update braucht sqrt und Division und bleibt element-weise.
-//  Die Bias-Korrektur haengt nur vom globalen Schritt t ab und wird deshalb
-//  EINMAL pro step() berechnet (nicht pro Layer); beta^t wird inkrementell
-//  fortgeschrieben (eine Multiplikation/Schritt statt posit_pow in O(t)).
-// ============================================================================
 template <typename T>
 class Adam : public Optimizer<T> {
 public:
@@ -53,7 +38,6 @@ public:
         _bias_corr1(T(1)),
         _bias_corr2(T(1))
     {
-        // Adam braucht zwei Status-Buffer (m, v) pro Parameter, mit 0 initialisiert.
         for (auto const& p : this->_parameters) {
             _m.push_back(StdTensor<T>(p.weight.shape()));
             _v.push_back(StdTensor<T>(p.weight.shape()));
@@ -63,23 +47,20 @@ public:
     }
 
     void step(double loss_scale = 1.0) {
-        // Ein globaler Zeitschritt pro Batch.
+        // The bias correction only depends on t, so it is computed once per step
+        // instead of once per parameter. beta^t is carried forward incrementally.
         _options.t++;
-
-        // beta^t inkrementell (O(1) statt posit_pow in O(t)); Bias-Korrektur einmal
-        // pro Schritt, da nur von t abhaengig (gilt fuer alle Layer gleich).
         _beta1_t *= _options.beta_1;
         _beta2_t *= _options.beta_2;
         T const one(1);
         _bias_corr1 = one / (one - _beta1_t);
         _bias_corr2 = one / (one - _beta2_t);
 
-        Optimizer<T>::step(loss_scale);   // verteilt update_parameter auf Threads
+        Optimizer<T>::step(loss_scale);
     }
 
     AdamOptions<T>& options() { return _options; }
 
-    // Lesezugriff auf die Momenten-Buffer (fuer Analyse/Tests)
     std::vector<StdTensor<T>> const& moments_m() const { return _m; }
     std::vector<StdTensor<T>> const& moments_v() const { return _v; }
 
@@ -89,17 +70,17 @@ private:
         StdTensor<T>& m = _m[i];
         StdTensor<T>& v = _v[i];
 
-        // Skalierte Gradienten (Loss-Scaling rueckgaengig). Bei scale==1 keine Kosten.
+        // Undo the loss scaling on the gradient
         StdTensor<T> g = p.gradient;
         if (loss_scale != 1.0)
             g *= T(1.0 / loss_scale);
 
-        // Momenten-Updates: fused (Quire, je eine Rundung)
+        // Moment updates via the quire, one rounding each
         fused(m, g, _options.beta_1, _one_minus_beta1);     // m = m*b1 + g*(1-b1)
         StdTensor<T> g2 = g * g;
         fused(v, g2, _options.beta_2, _one_minus_beta2);    // v = v*b2 + g2*(1-b2)
 
-        // Gewichts-Update: sqrt + Division, zwingend element-weise
+        // The weight update needs sqrt and division, so it stays element-wise
         T const lr  = _options.learning_rate;
         T const eps = _options.eps;
         using sw::unum::sqrt;
@@ -109,15 +90,15 @@ private:
             w[j] = w[j] - (lr * m_hat) / (sqrt(v_hat) + eps);
         }
 
-        p.update();   // Mixed-Precision: ggf. Forward/Backward-Gewichte aktualisieren
+        p.update();
     }
 
     AdamOptions<T> _options;
     std::vector<StdTensor<T>> _m;
     std::vector<StdTensor<T>> _v;
-    T _one_minus_beta1, _one_minus_beta2;   // Konstanten (einmal berechnet)
-    T _beta1_t, _beta2_t;                   // beta^t, inkrementell fortgeschrieben
-    T _bias_corr1, _bias_corr2;             // pro step() gesetzt, in update_parameter nur gelesen
+    T _one_minus_beta1, _one_minus_beta2;
+    T _beta1_t, _beta2_t;                   // beta^t
+    T _bias_corr1, _bias_corr2;             // written by step(), read by update_parameter()
 };
 
 #endif /* ADAM_HPP */

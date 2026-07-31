@@ -23,9 +23,10 @@ public:
 			if(approximate && ForwardT::es==0)
 				y[i] = sigmoid_approx(x[i]);
 			else {
-				// Fallunterscheidung (statt 1/(1+exp(-x))): vermeidet exp(grosser
-				// positiver Wert), der in der double-Fallback-exp() ueberlaufen und
-				// zu NaR konvertieren kann. Siehe posit16_1_nar_analysis.md Abschnitt 11.
+				// Case split instead of 1/(1+exp(-x)): for very negative x the plain
+				// form evaluates exp() at a large positive argument, which overflows
+				// the double fallback and converts to NaR. Here the argument of exp()
+				// is always <= 0, so it can only underflow and the result saturates.
 				if (x[i] >= ForwardT(0)) {
 					y[i] = ForwardT(1) / (ForwardT(1) + exp(-x[i]));
 				} else {
