@@ -4,6 +4,7 @@
 //namespace positnn {
 
 // Activation functions
+#include "activation/LeakyReLU.hpp"
 #include "activation/LogSoftmax.hpp"
 #include "activation/ReLU.hpp"
 #include "activation/Sigmoid.hpp"
