@@ -108,6 +108,39 @@ public:
     std::vector<StdTensor<T>> const& moments_m() const { return _m; }
     std::vector<StdTensor<T>> const& moments_v() const { return _v; }
 
+    // ------------------------------------------------------------------------
+    //  Optimizer state, for checkpoint and resume.
+    //
+    //  Without m, v and t a resumed run is not a resumed run: Adam restarts with
+    //  empty moments and the bias correction of t=1, and takes a few
+    //  disproportionately large steps. For a GAN that is enough to destroy a
+    //  balance the two networks had already reached.
+    //
+    //  Format: t, then m for every parameter, then v. The bias correction
+    //  factors are reconstructed from t rather than stored, since they depend
+    //  only on t and the betas, and those come from the configuration anyway.
+    // ------------------------------------------------------------------------
+    template <typename PositFile=T>
+    void write(std::ostream& out) {
+        size_t const t = _options.t;
+        out.write((char*)&t, sizeof(t));
+        for (StdTensor<T>& m : _m) m.template write<PositFile>(out);
+        for (StdTensor<T>& v : _v) v.template write<PositFile>(out);
+    }
+
+    template <typename PositFile=T>
+    void read(std::istream& in) {
+        size_t t = 0;
+        in.read((char*)&t, sizeof(t));
+        _options.t = t;
+        _synced_t = t;
+        for (StdTensor<T>& m : _m) m.template read<PositFile>(in);
+        for (StdTensor<T>& v : _v) v.template read<PositFile>(in);
+
+        // Catch beta^t up so the bias correction of the next step() is right.
+        replay_beta_powers(t);
+    }
+
 private:
     // options() hands out a mutable reference, as SGD's does, and the examples use
     // it for a learning rate schedule. Since the conversions are cached, a write
