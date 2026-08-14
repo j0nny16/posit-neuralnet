@@ -52,6 +52,7 @@
 #include "utils/train_test_threads.hpp"
 #include "utils/type_name.hpp"
 #include "utils/utils.hpp"
+#include "utils/health_utils.hpp"
 
 //}
 
