@@ -27,6 +27,7 @@
 #include "layer/RangeBatchNorm1d.hpp"
 
 // Loss functions
+#include "loss/BCELoss.hpp"
 #include "loss/CrossEntropyLoss.hpp"
 #include "loss/MSELoss.hpp"
 #include "loss/NLLLoss.hpp"
