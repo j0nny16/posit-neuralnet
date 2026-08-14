@@ -14,6 +14,7 @@
 #include "layer/AdaptiveScale.hpp"
 #include "layer/AvgPool2d.hpp"
 #include "layer/BatchNorm1d.hpp"
+#include "layer/BatchNorm2d.hpp"
 #include "layer/BackScale.hpp"
 #include "layer/Conv2d.hpp"
 #include "layer/Transposed_Conv2d.hpp"
