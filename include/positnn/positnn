@@ -33,6 +33,7 @@
 #include "optimizer/Optimizer.hpp"
 #include "optimizer/SGD.hpp"
 #include "optimizer/SGDMixed.hpp"
+#include "optimizer/Adam.hpp"
 
 // Tensor (StdTensor) and operations
 #include "tensor/averagepool.hpp"
