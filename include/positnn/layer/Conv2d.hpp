@@ -98,9 +98,10 @@ public:
 
 		// If there are many samples
 		if(input.dim()>1 && input.shape()[0]>1){
-			// No division by the batch size here: the mean reduction is applied once,
-			// in the loss (see MSELoss::derivative).
+			temp_weight_gradient /= input.shape()[0];
+
 			temp_bias_gradient = sum_first(temp_bias_gradient);
+			temp_bias_gradient /= input.shape()[0];
 		}
 
 		weight_gradient += temp_weight_gradient;
