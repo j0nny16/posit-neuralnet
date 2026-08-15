@@ -79,7 +79,7 @@ public:
         }
     }
 
-    void step() {
+    void step(double loss_scale = 1.0) {
         // Pick up anything the caller wrote into options() since the last step.
         sync_options();
 
@@ -100,7 +100,7 @@ public:
         _bias_corr1 = one / (one - _beta1_t);
         _bias_corr2 = one / (one - _beta2_t);
 
-        Optimizer<T>::step();
+        Optimizer<T>::step(loss_scale);
     }
 
     AdamOptions<T>& options() { return _options; }
@@ -174,12 +174,23 @@ private:
         }
     }
 
-    void update_parameter(Parameter<T>& p, size_t const i) override {
+    void update_parameter(Parameter<T>& p, size_t const i, double loss_scale = 1.0) override {
         StdTensor<T>& w = p.weight;
         StdTensor<T>& m = _m[i];
         StdTensor<T>& v = _v[i];
 
-        StdTensor<T> const& g = p.gradient;
+        // Undo the loss scaling before the gradient enters the moments, so that m
+        // and v stay in the same units regardless of the scale factor. At the
+        // default scale of 1 this costs a copy elision and nothing else.
+        //
+        // The division is done in T rather than by multiplying with a reciprocal
+        // computed in double, so the rounding is the one posit hardware would do.
+        StdTensor<T> g_scaled;
+        if (loss_scale != 1.0) {
+            g_scaled = p.gradient;
+            g_scaled /= T(loss_scale);
+        }
+        StdTensor<T> const& g = (loss_scale != 1.0) ? g_scaled : p.gradient;
 
         // The moment updates go through fused() (matrix.hpp), so each product is
         // accumulated exactly in the quire and rounded once, instead of the three

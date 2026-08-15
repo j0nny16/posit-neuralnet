@@ -2,6 +2,8 @@
 #define SGDMIXED_HPP
 
 // General headers
+#include <iostream>
+#include <cstdlib>
 #include <universal/posit/posit>
 
 // Custom headers
@@ -38,7 +40,13 @@ public:
 		return;
 	}
 
-	void step() {
+	void step(double loss_scale=1.0) {
+		// Loss scaling is only implemented for Adam.
+		if(loss_scale != 1.0){
+			std::cerr << "[SGDMixed] loss_scale != 1.0 is not supported (Adam only)." << std::endl;
+			std::abort();
+		}
+
 		copy_gradients(_parameters_model, _parameters_optimizer);
 
 		StdTensor<T2> dweight;
