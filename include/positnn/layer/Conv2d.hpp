@@ -36,18 +36,21 @@ public:
 		reset_parameters();
 	}
 
-	// Same initialization as torch.nn.Conv2d. The bounds are computed in float so
-	// that std::sqrt can be used; leaky_relu with a=0 is equivalent to relu.
+	// Same initialization as torch.nn.Conv2d, and the same shape as Linear's:
+	// draw into the optimizer copy, which is the one the optimizer actually owns,
+	// then let MixedTensor::update() derive the forward and backward copies. The
+	// bounds are computed in float so that std::sqrt can be used.
 	void reset_parameters() {
-		kaiming_uniform<ForwardT, float>(weight.get_forward(), 0, Mode::fan_in, NonLinearity::relu);
+		kaiming_uniform<OptimizerT, float>(weight.get_optimizer(), std::sqrt(5));
 
-		if (!bias.get_forward().empty()) {
-			float fan_in = calculate_correct_fan<ForwardT, float>(weight.get_forward(), Mode::fan_in);
+		if (!bias.get_optimizer().empty()) {
+			float fan_in = calculate_correct_fan<OptimizerT, float>(weight.get_optimizer(), Mode::fan_in);
 			float bound = 1.0 / std::sqrt(fan_in);
-			set_uniform<ForwardT, float>(bias.get_forward(), -bound, bound);
+			set_uniform<OptimizerT, float>(bias.get_optimizer(), -bound, bound);
 		}
 
-		weight.get_backward() = weight.get_forward();
+		weight.update();
+		bias.update();
 	}
 
 	template <typename T>
