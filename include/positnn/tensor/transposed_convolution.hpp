@@ -254,7 +254,8 @@ StdTensor<posit<nbits, es>> transposed_convolution2d(StdTensor<posit<nbits, es>>
                                                      StdTensor<posit<nbits, es>> const& bias,
                                                      size_t const stride=1,
                                                      size_t const padding=0,
-                                                     size_t const output_padding=0,
+                                                     size_t const output_padding_h=0,
+                                                     size_t const output_padding_w=0,
                                                      size_t const dilation=1,
                                                      Window* w=nullptr) {
 
@@ -262,10 +263,14 @@ StdTensor<posit<nbits, es>> transposed_convolution2d(StdTensor<posit<nbits, es>>
 	size_t const out_channels = weight.shape()[1];
 	size_t const kernel       = weight.shape()[2];	// square
 
+	// output_padding is per axis. The kernel, stride and padding are square, as
+	// everywhere else in the framework, but the two axes still need separate
+	// output_padding whenever the input is not: Conv2d::backward has to undo a
+	// floor division that can drop a row without dropping a column.
 	size_t const in_h  = input.shape()[2];
 	size_t const in_w  = input.shape()[3];
-	size_t const out_h = transposed_output_size(in_h, kernel, stride, padding, output_padding, dilation);
-	size_t const out_w = transposed_output_size(in_w, kernel, stride, padding, output_padding, dilation);
+	size_t const out_h = transposed_output_size(in_h, kernel, stride, padding, output_padding_h, dilation);
+	size_t const out_w = transposed_output_size(in_w, kernel, stride, padding, output_padding_w, dilation);
 
 	bool const owns = (w == nullptr);
 	if(owns)

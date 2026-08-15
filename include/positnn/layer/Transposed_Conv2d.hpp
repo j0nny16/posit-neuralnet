@@ -59,9 +59,11 @@ public:
 	template <typename T>
 	StdTensor<ForwardT> forward(StdTensor<T> const& x) {
 		input = x;
+		// The layer's output_padding is square, like its other spatial parameters,
+		// so the same value goes to both axes.
 		return transposed_convolution2d<ForwardT::nbits, ForwardT::es>(
 			x, weight.get_forward(), bias.get_forward(),
-			stride, padding, output_padding, dilation, &w_forward
+			stride, padding, output_padding, output_padding, dilation, &w_forward
 		);
 	}
 

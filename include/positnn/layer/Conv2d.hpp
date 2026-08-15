@@ -75,13 +75,20 @@ public:
 		if (saved_input_shape.empty())
 			throw std::runtime_error("[Conv2d] backward() called before forward()");
 
-		// Square input assumed, consistent with the rest of the layer API.
-		size_t const op_base = (delta.shape()[2]-1)*stride - 2*padding + dilation*(kernel_size-1) + 1;
-		size_t const output_padding = saved_input_shape[2] - op_base;
+		// Per axis: the kernel, stride and padding are square, but the input need
+		// not be, and the floor division can drop a row without dropping a column.
+		// A 6x7 input at kernel 3, stride 2 needs output_padding 1 on the height
+		// and 0 on the width.
+		auto op_for = [&](size_t out_size, size_t in_size) {
+			size_t const base = (out_size-1)*stride - 2*padding + dilation*(kernel_size-1) + 1;
+			return in_size - base;
+		};
+		size_t const output_padding_h = op_for(delta.shape()[2], saved_input_shape[2]);
+		size_t const output_padding_w = op_for(delta.shape()[3], saved_input_shape[3]);
 
 		return transposed_convolution2d<BackwardT::nbits, BackwardT::es>(
 			delta, weight.get_backward(), StdTensor<BackwardT>(),
-			stride, padding, output_padding, dilation, &w3
+			stride, padding, output_padding_h, output_padding_w, dilation, &w3
 		);
 	}
 
