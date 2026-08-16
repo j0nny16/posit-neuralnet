@@ -26,6 +26,10 @@ using namespace sw::unum;
 // the model is NaR after one step. This is a real property of the format, not
 // something to paper over, so the constructor checks the converted values and
 // refuses to build an optimizer that cannot work.
+//
+// The struct stays writable through options(), as in SGD, so a training loop can
+// retune the optimizer between steps. The converted values are cached, so step()
+// reconverts and rechecks whatever changed before using them.
 template <typename T>
 struct AdamOptions {
     AdamOptions(double _learning_rate, double _beta_1=0.9, double _beta_2=0.999, double _eps=1e-8) :
@@ -49,6 +53,7 @@ public:
     Adam(std::vector<Parameter<T>> parameters0, AdamOptions<T> options0) :
         Optimizer<T>(parameters0),
         _options(options0),
+        _synced_t(options0.t),
         _beta_1(T(options0.beta_1)),
         _beta_2(T(options0.beta_2)),
         // 1 - beta in T, not T(1.0 - beta): the subtraction is arithmetic and so
@@ -75,13 +80,20 @@ public:
     }
 
     void step() {
+        // Pick up anything the caller wrote into options() since the last step.
+        sync_options();
+
         // The bias correction only depends on t, so it is computed once per step
         // instead of once per parameter. beta^t is carried forward incrementally,
         // which is one multiplication per step instead of a pow() in O(t).
         //
         // All of it in T: beta^t decays in the parameter format, and the bias
         // correction is the posit division the hardware would do.
+        //
+        // t and beta^t advance together, so the invariant sync_options() relies on
+        // -- beta^t is beta multiplied into itself t times -- still holds after.
         _options.t++;
+        _synced_t = _options.t;
         _beta1_t *= _beta_1;
         _beta2_t *= _beta_2;
         T const one(1);
@@ -97,6 +109,71 @@ public:
     std::vector<StdTensor<T>> const& moments_v() const { return _v; }
 
 private:
+    // options() hands out a mutable reference, as SGD's does, and the examples use
+    // it for a learning rate schedule. Since the conversions are cached, a write
+    // through that reference would otherwise change nothing at all, silently. So
+    // every step restores the invariant that the cached values are what the
+    // options currently convert to, which is what the rest of the class assumes.
+    //
+    // Stated that way rather than as "did the caller assign something", the check
+    // compares the converted values, not the doubles: two doubles that round to
+    // the same posit leave the optimizer's behaviour identical, so there is
+    // nothing to redo. It costs four conversions per step, against a whole
+    // parameter update's worth of posit arithmetic.
+    //
+    // The constructor's checks are repeated here rather than skipped: a learning
+    // rate or beta assigned later can be just as unrepresentable as one passed in,
+    // and the same exception is a better answer than a training run that quietly
+    // stops moving.
+    void sync_options() {
+        T const lr(_options.learning_rate);
+        if (lr != _learning_rate) {
+            _learning_rate = lr;
+            check_learning_rate(_options.learning_rate, _learning_rate);
+        }
+
+        T const eps(_options.eps);
+        if (eps != _eps)
+            _eps = eps;
+
+        T const beta_1(_options.beta_1);
+        T const beta_2(_options.beta_2);
+        bool const beta1_changed = (beta_1 != _beta_1);
+        bool const beta2_changed = (beta_2 != _beta_2);
+
+        if (beta1_changed) {
+            _beta_1 = beta_1;
+            _one_minus_beta1 = T(1) - _beta_1;
+            check_beta(_options.beta_1, _beta_1, _one_minus_beta1, "beta_1");
+        }
+        if (beta2_changed) {
+            _beta_2 = beta_2;
+            _one_minus_beta2 = T(1) - _beta_2;
+            check_beta(_options.beta_2, _beta_2, _one_minus_beta2, "beta_2");
+        }
+
+        // t and the betas are what beta^t was accumulated from, so either one
+        // moving leaves it stale. Rebuilding costs t multiplications, but only on
+        // the step where something actually changed, and a beta is not something a
+        // training loop retunes every step.
+        if (beta1_changed || beta2_changed || _options.t != _synced_t)
+            replay_beta_powers(_options.t);
+
+        _synced_t = _options.t;
+    }
+
+    // beta^t from scratch, in T and with the same multiplication step() uses, so
+    // the result is the value an uninterrupted run would have reached rather than
+    // a cleaner one it never would have.
+    void replay_beta_powers(size_t const t) {
+        _beta1_t = T(1);
+        _beta2_t = T(1);
+        for (size_t i = 0; i < t; ++i) {
+            _beta1_t *= _beta_1;
+            _beta2_t *= _beta_2;
+        }
+    }
+
     void update_parameter(Parameter<T>& p, size_t const i) override {
         StdTensor<T>& w = p.weight;
         StdTensor<T>& m = _m[i];
@@ -160,6 +237,7 @@ private:
     }
 
     AdamOptions<T> _options;
+    size_t _synced_t;                       // the t that beta^t below was accumulated to
     std::vector<StdTensor<T>> _m;
     std::vector<StdTensor<T>> _v;
     T _beta_1, _beta_2;                     // converted once, used by fused()
